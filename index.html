@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>全功能本地音樂 PK 評分器</title>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --text: #f8fafc; --sub: #94a3b8; }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 16px; display: flex; flex-direction: column; align-items: center; }
+        h1 { font-size: 1.3rem; margin: 0 0 4px 0; }
+        .subtitle { color: var(--sub); font-size: 0.8rem; margin-bottom: 16px; }
+        
+        .setup-box { background: var(--card); padding: 16px; border-radius: 12px; width: 100%; box-sizing: border-box; text-align: center; margin-bottom: 16px; border: 1px solid #334155; }
+        .btn-upload {
+            background: var(--accent); color: #0f172a; font-weight: bold; padding: 14px; border-radius: 10px; cursor: pointer; display: block; width: 100%; box-sizing: border-box; font-size: 1rem;
+        }
+
+        .arena { display: flex; flex-direction: column; gap: 12px; width: 100%; margin-bottom: 16px; }
+        .card { background: var(--card); border: 2px solid #334155; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+        .song-title { font-size: 1rem; font-weight: 600; word-break: break-all; }
+        audio { width: 100%; height: 40px; }
+        .btn-vote { background: #22c55e; color: #fff; font-size: 1rem; font-weight: bold; padding: 12px; border-radius: 8px; border: none; cursor: pointer; }
+
+        .stats { color: var(--sub); font-size: 0.85rem; margin-bottom: 12px; width: 100%; display: flex; justify-content: space-between; }
+        .leaderboard { width: 100%; background: var(--card); border-radius: 12px; padding: 14px; box-sizing: border-box; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 8px; }
+        th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid #334155; }
+        th { color: var(--sub); }
+    </style>
+</head>
+<body>
+
+    <h1>🎵 本地音樂 PK 評分器 (可播放版)</h1>
+    <p class="subtitle">選取內部儲存空間的 Music 資料夾即可全自動載入與播放</p>
+
+    <div class="setup-box">
+        <label class="btn-upload">
+            📁 選取音樂總資料夾 (自動載入音訊)
+            <input type="file" id="folderInput" webkitdirectory directory multiple accept="audio/*" style="display:none;">
+        </label>
+        <div id="statusText" style="color: var(--sub); font-size: 0.85rem; margin-top: 10px;">未載入音樂檔案</div>
+    </div>
+
+    <div class="stats" id="statsArea" style="display:none;">
+        <span id="matchStats">對決次數：0 次</span>
+        <span id="activeCount">歌單庫：0 首</span>
+    </div>
+
+    <div class="arena" id="arena" style="display: none;">
+        <div class="card">
+            <div class="song-title" id="titleA">歌曲 A</div>
+            <audio id="audioA" controls preload="metadata"></audio>
+            <button class="btn-vote" onclick="vote('A')">👍 喜歡這首 (上)</button>
+        </div>
+
+        <div class="card">
+            <div class="song-title" id="titleB">歌曲 B</div>
+            <audio id="audioB" controls preload="metadata"></audio>
+            <button class="btn-vote" onclick="vote('B')">👍 喜歡這首 (下)</button>
+        </div>
+    </div>
+
+    <div class="leaderboard" id="leaderboardArea" style="display: none;">
+        <h2 style="margin:0; font-size: 1.1rem;">🏆 喜好排行榜 (Top 20)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>歌名</th>
+                    <th>Elo 積分</th>
+                    <th>勝/負</th>
+                </tr>
+            </thead>
+            <tbody id="leaderboardBody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        let songs = [];
+        let currentA = null, currentB = null;
+        let totalMatches = 0;
+
+        const folderInput = document.getElementById('folderInput');
+        const audioA = document.getElementById('audioA');
+        const audioB = document.getElementById('audioB');
+
+        folderInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files).filter(f => f.type.startsWith('audio/') || f.name.match(/\.(mp3|wav|flac|ogg|m4a)$/i));
+            
+            if (files.length < 2) {
+                alert('未找到足夠的音樂檔案！請確認選取的是包含音檔的資料夾。');
+                return;
+            }
+
+            document.getElementById('statusText').textContent = `正在建立 ${files.length} 首歌曲的音訊索引...`;
+
+            songs = files.map(file => ({
+                name: file.name.replace(/\.[^/.]+$/, ""),
+                file: file,
+                url: URL.createObjectURL(file), // 為每個實體檔案建立可播放的 Blob URL
+                rating: 1200,
+                wins: 0,
+                losses: 0
+            }));
+
+            document.getElementById('statusText').textContent = `已成功匯入 ${songs.length} 首可播放歌曲！`;
+            document.getElementById('statsArea').style.display = 'flex';
+            document.getElementById('arena').style.display = 'flex';
+            document.getElementById('leaderboardArea').style.display = 'block';
+
+            updateStats();
+            updateLeaderboard();
+            nextMatch();
+        });
+
+        function nextMatch() {
+            if (songs.length < 2) return;
+
+            let idxA = Math.floor(Math.random() * songs.length);
+            let idxB;
+            do {
+                idxB = Math.floor(Math.random() * songs.length);
+            } while (idxA === idxB);
+
+            currentA = songs[idxA];
+            currentB = songs[idxB];
+
+            document.getElementById('titleA').textContent = currentA.name;
+            document.getElementById('titleB').textContent = currentB.name;
+            
+            audioA.src = currentA.url;
+            audioB.src = currentB.url;
+            
+            audioA.pause();
+            audioB.pause();
+        }
+
+        function vote(winner) {
+            if (!currentA || !currentB) return;
+
+            const K = 32;
+            const expectedA = 1 / (1 + Math.pow(10, (currentB.rating - currentA.rating) / 400));
+            const expectedB = 1 - expectedA;
+
+            if (winner === 'A') {
+                currentA.rating += K * (1 - expectedA);
+                currentB.rating += K * (0 - expectedB);
+                currentA.wins++;
+                currentB.losses++;
+            } else {
+                currentA.rating += K * (0 - expectedA);
+                currentB.rating += K * (1 - expectedB);
+                currentA.losses++;
+                currentB.wins++;
+            }
+
+            totalMatches++;
+            updateStats();
+            updateLeaderboard();
+            nextMatch();
+        }
+
+        function updateStats() {
+            document.getElementById('matchStats').textContent = `對決次數：${totalMatches} 次`;
+            document.getElementById('activeCount').textContent = `歌單庫：${songs.length} 首`;
+        }
+
+        function updateLeaderboard() {
+            const sorted = [...songs].sort((a, b) => b.rating - a.rating);
+            const tbody = document.getElementById('leaderboardBody');
+            tbody.innerHTML = '';
+
+            sorted.slice(0, 20).forEach((song, index) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>#${index + 1}</td>
+                    <td>${song.name}</td>
+                    <td>${Math.round(song.rating)}</td>
+                    <td>${song.wins}W/${song.losses}L</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+    </script>
+</body>
+</html>
